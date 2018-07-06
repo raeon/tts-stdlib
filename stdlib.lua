@@ -36,7 +36,8 @@ do
         author = '',
         profile = '',
         license = '',
-        debugging = false
+        debugging = false,
+        stdlib = 2, -- immutable
     }
 
     -- Generate functions in global namespace to manipulate the above table.
@@ -599,89 +600,105 @@ do
     ]]
 
     function upgrade(url)
+        debug('upgrade: ', url)
 
-        -- Handle v1 upgrades.
+        -- If we are the new object, we will report back our result.
         if _PREVIOUS then
-            debug('upgrade: detected v1, destroying prev: ', _PREVIOUS.guid)
-            cycle() -- removing objects during onLoad doesn't work properly, so wait a moment.
+            local prev = _PREVIOUS
 
-            -- Destroy the old object.
-            local prev = getObjectFromGUID(_PREVIOUS.guid)
-            prev.destruct()
+            -- Fill any potentially missing variables (v1 => v2).
+            prev.stdlib = prev.stdlib or 1
+            if prev.interact == nil then prev.interact = true end
 
-            -- Assume the old objects position.
-            debug('ugprade: assuming v1 position')
-            self.setLock(false)
-            self.setPosition(_PREVIOUS.position)
-            self.setRotation(_PREVIOUS.rotation)
-            self.setVelocity(_PREVIOUS.velocity)
-            self.setLock(_PREVIOUS.lock)
-            debug('upgrade: finished')
-            return true
+            local prevObj = getObjectFromGUID(prev.guid)
+            local success = version() > prev.version
+
+            debug('upgrade: success: ', success)
+
+            -- Handle failure.
+            if not success then
+                debug('upgrade: no increase in version')
+
+                -- v2 needs to know we failed so it can continue running its onLoad coroutine.
+                if prev.stdlib >= 2 then
+                    invoke(prevObj, 'resume', 'upgrade', false)
+                end
+
+                -- All versions expect us to delete ourself.
+                debug('upgrade: destroying self, halting')
+                self.destruct()
+                halt()
+            end
+
+            -- From here onward we're handling success.
+
+            -- Notify the original that we are the new version. This will invoke halt() so it stops
+            -- running it's onLoad coroutine, letting us destroy the object.
+            if prev.stdlib >= 2 then
+                invoke(prevObj, 'resume', 'upgrade', true)
+            end
+
+            -- Delete the original.
+            debug('upgrade: moving away original')
+            prevObj.setScale({ 0, 0, 0 })
+            prevObj.setPosition({ 0, -200, 0 })
+            prevObj.setLock(true)
+            debug('upgrade: destroying original')
+            prevObj.destruct()
+
+            -- Assume the previous objects position.
+            debug('upgrade: assuming original position')
+            self.setPosition(prev.position)
+            self.setRotation(prev.rotation)
+            self.setVelocity(prev.velocity)
+            self.interactable = prev.interact
+            self.setLock(prev.lock)
+            return
         end
 
-        -- Handle v2 upgrades.
-        if _ORIGINAL then
-            debug('upgrade: detected v2, invoking resume')
-            local orig = getObjectFromGUID(_ORIGINAL)
-            invoke(orig, 'resume', 'upgrade') -- resume the upgrade script
-            debug('upgrade: finished')
-            return true
-        end
-
-        -- To check for updates, download the script first.
-        debug('upgrade: downloading new script')
+        -- If we are the old object, we first request the script.
         local req, err = webGet(url)
         if err then
-            debug('upgrade: failed to check for updates: ', err)
-            return false, err
+            debug('upgrade: web error: ', err)
+            return
         end
 
-        -- Check if the script actually changed.
+        -- If the script is identical we don't really need to do anything.
         if req.text == self.getLuaScript() then
-            debug('upgrade: script is identical, aborting')
-            return false
+            debug('upgrade: identical script')
+            return
         end
-        debug('upgrade: old length: ', string.len(self.getLuaScript()))
-        debug('upgrade: new length: ', string.len(req.text))
 
-        -- Clone ourselves somewhere we won't be seen.
-        debug('upgrade: cloning self')
-        local obj = self.clone({ position = { x = 0, y = 200, z = 0 } })
-        obj.setLock(true) -- wouldn't want it to fall down
-        obj.interactable = false -- make sure nobody selects it by accident (somehow)
-        obj.setVar('_ORIGINAL', self.getGUID()) -- tell the new object who to notify
+        -- Fill in our information in _CURRENT.
+        _CURRENT.guid = self.getGUID()
+        _CURRENT.position = self.getPosition()
+        _CURRENT.rotation = self.getRotation()
+        _CURRENT.velocity = self.getVelocity()
+        _CURRENT.lock = self.getLock()
+        _CURRENT.interact = self.interactable
 
-        -- Load the new script and make sure we don't miss the notification!
-        debug('upgrade: awaiting callback')
+        -- Spawn the new object and make sure it is completely inert.
+        local new = self.clone({ position = { 0, 200, 0 }})
+        new.setLock(true)
+        new.interactable = false
+        new.setTable('_PREVIOUS', _CURRENT)
+
+        -- Load in the new script.
         prewait('upgrade')
-        obj.setLuaScript(req.text)
+        new.setLuaScript(req.text)
 
-        -- Now, we wait for the new script to notify us. If it doesn't, we know the new script is
-        -- malfunctioning, either by containing behavioural or syntax errors.
-        if not await('upgrade', 200) then
+        -- Wait for the new object to tell us it succeeded or not.
+        local onTime, success = await('upgrade', 200)
+
+        -- If the script fails to load completely, we are responsible for cleaning up the mess.
+        if not onTime then
             debug('upgrade: callback timed out')
-            obj.destruct()
-            return false, 'upgrade timed out'
+            new.destruct()
+            return
         end
 
-        -- If it works, we move ourselves out of the way.
-        debug('upgrade: moving self away')
-        local pos = self.getPosition()
-        self.setPosition({ x = 0, y = 210, z = 0 })
-
-        -- Move the other object to our original position.
-        debug('upgrade: moving upgraded version to our original position')
-        obj.setPosition(pos, false, true)
-        obj.setRotation(self.getRotation())
-        obj.setVelocity(self.getVelocity())
-        obj.setLock(self.getLock())
-        obj.interactable = self.interactable
-
-        -- Delete ourselves and prevent any further code form being run.
-        debug('upgrade: finished')
-        self.destruct()
-        halt()
+        -- If it succeeds, halt execution. (The new object deletes the old object.)
+        if success then halt() end
     end
 
 end
