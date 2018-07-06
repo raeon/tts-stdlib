@@ -2,6 +2,7 @@
     Tabletop Simulator Standard Library (tts-stdlib).
     Created by Red Mushroom.
     Profile: https://steamcommunity.com/id/Red_Mush
+    Github: https://github.com/raeon/tts-stdlib
     License:
         Copyright (c) 2018 Joris Klein Tijssink
 
