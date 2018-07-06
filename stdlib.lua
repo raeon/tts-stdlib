@@ -600,7 +600,6 @@ do
     ]]
 
     function upgrade(url)
-        debug('upgrade: ', url)
 
         -- If we are the new object, we will report back our result.
         if _PREVIOUS then
