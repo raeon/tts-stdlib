@@ -226,7 +226,7 @@ do
             _pollables[pid] = nil
 
             -- then, resume the coroutine with 'true' and the args as the result.
-            _cycle(id, co, { true, args })
+            _cycle(id, co, { true, table.unpack(args) })
         end)
         debug('awaiting: ', act.key)
         return false, {} -- not resumable
@@ -528,7 +528,7 @@ do
     local _stackForm = {}
 
     on('ObjectSpawn', function(obj)
-        if obj.getQuantity() ~= 2 then return end
+        if obj.getQuantity() < 2 then return end
 
         -- If we're dealing with a deck, check the contents.
         if obj.tag == 'Deck' then
@@ -687,6 +687,7 @@ do
         new.setLuaScript(req.text)
 
         -- Wait for the new object to tell us it succeeded or not.
+        debug('upgrade: waiting for callback')
         local onTime, success = await('upgrade', 200)
 
         -- If the script fails to load completely, we are responsible for cleaning up the mess.
@@ -695,6 +696,8 @@ do
             new.destruct()
             return
         end
+
+        debug('upgrade: callback replied with success: ', success)
 
         -- If it succeeds, halt execution. (The new object deletes the old object.)
         if success then halt() end
